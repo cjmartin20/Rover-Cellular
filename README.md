@@ -6,6 +6,7 @@ We can update the name later, just threw this out here to get started.
 ### Initial
 -RC Car
 -Controller (maybe we try playstation controller first with Bluetooth?
+-LCD Screen
 ### Later/Advancement
 -Speaker/microphone
 -Car simulator Controls for computer
