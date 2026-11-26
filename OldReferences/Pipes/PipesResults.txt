@@ -1,0 +1,290 @@
+"C Option"
+
+[cjmartin@localhost Pipes]$ gcc -o systemMonitoring src/anonymous_pipes.c src/seedRandGenerator.c src/randapi.c
+[cjmartin@localhost Pipes]$ ./systemMonitoring 
+---------------------------------
+USS Enterprise Systems Monitoring
+TIME ON DECK [21:20:40]
+---------------------------------
+NAV : navigation bearing adjustment		- Elapsed Time : 4.862 sec RECIEVED AT BRIDGE [21:20:44]
+LS  : breathing gas levels adjustment	 	- Elapsed Time : 8.299 sec RECIEVED AT BRIDGE [21:20:48]
+LS  : temperature and lighting adjustment	- Elapsed Time : 2.374 sec RECIEVED AT BRIDGE [21:20:50]
+[cjmartin@localhost Pipes]$ 
+
+
+
+[cjmartin@localhost Pipes]$ cat src/anonymous_pipes.c 
+//in file anonymous_pipes.c
+#include <stdio.h>
+#include <unistd.h>
+#include <time.h>
+#include <wait.h>
+#include <string.h>
+#include "randapi.h"
+
+#define MaxLen 80
+#define PipeStdIn 0 //stdin for Unix is 0
+#define PipeStdOut 1 //stdout for Unix is 1
+
+int main ( ) { //bridge 
+
+	int ret, ret2, comPipes[2]; //comPipes[0] for input, comPipes[1] for output
+	char buff[ MaxLen + 1 ];
+
+	time_t t = time(NULL);
+	struct tm startTime = *localtime( &t );
+
+	printf( "---------------------------------\n" );
+	printf( "USS Enterprise Systems Monitoring\n" );
+	printf( "TIME ON DECK [%d:%d:%d]\n", startTime.tm_hour, startTime.tm_min, startTime.tm_sec);
+	printf( "---------------------------------\n" );
+
+	if( pipe( comPipes ) == 0 ) { //create pipes
+	// seed random number generator
+	seedRandGenerator( );
+
+		pid_t navID = fork( );
+		if ( navID == 0) { // create navigation, child 1
+			
+			pid_t lsID = fork( );
+			if( lsID == 0 ) { // create life support – child 2
+				struct tm currTime = *localtime( &t );
+				float lsTime;
+
+				char lsBuff[ MaxLen + 1 ];
+				char *gasFormat = {"LS  : breathing gas levels adjustment	 	- Elapsed Time : %5.3f sec"};
+				char *litFormat = {"LS  : temperature and lighting adjustment	- Elapsed Time : %5.3f sec"};
+				int n = 1; 
+
+				while( n > 0 ) {
+					//adjust gas levels
+					lsTime = getRandExponential() * 5.0;
+					sleep( lsTime );
+					sprintf(&lsBuff[0], gasFormat, lsTime);
+					ret = write( comPipes[ PipeStdOut ], lsBuff, MaxLen );
+					//adjust lighting and temperature
+					lsTime = getRandExponential() * 4.0;
+					sleep( lsTime );
+					sprintf(&lsBuff[0], litFormat, lsTime);
+					ret = write( comPipes[ PipeStdOut ], lsBuff, MaxLen );
+					ret = wait( NULL );
+					t = time(NULL);
+					currTime = *localtime( &t );
+					n--;
+				} // end while - life support loop
+			} //end life support process
+			else {
+				// child1 navigation
+				struct tm currTime = *localtime( &t );
+				float navTime;
+
+				char navBuff[ MaxLen + 1 ];
+				char *navFormat = {"NAV : navigation bearing adjustment		- Elapsed Time : %5.3f sec"};
+				int n = 1; 
+
+				while( n > 0 ) {
+					navTime = getRandFloat() * 6.0;
+					sleep( navTime );
+					sprintf(&navBuff[0], navFormat, navTime);
+					ret = write( comPipes[ PipeStdOut ], navBuff, MaxLen );
+					t = time(NULL);
+					currTime = *localtime( &t );
+					n--;
+				}  // end while – navigation loop
+			} //end navigation process
+			// code common to life support and navigation
+			ret = wait( NULL );
+		}
+		else  { // bridge
+			struct tm currTime = *localtime( &t );
+			int knt = 3;
+			while ( knt > 0 ) { //for later use startTime.tm_min + 1 > currTime.tm_min
+				ret = read( comPipes[ PipeStdIn ], buff, MaxLen );
+				printf( "%s", buff );
+				t = time(NULL);
+				currTime = *localtime( &t );
+				printf( " RECIEVED AT BRIDGE [%02d:%02d:%02d]\n", currTime.tm_hour, currTime.tm_min, currTime.tm_sec);
+				knt--;
+			}  //end while
+		}  // end bridge specific
+		// code common to bridge and life support
+		close( comPipes[ PipeStdIn ] );
+		close( comPipes[ PipeStdOut ] );
+	}
+	return 0;
+} // end program
+
+
+
+
+
+
+[cjmartin@localhost Pipes]$ cat src/randapi.h
+/*	in file randapi.h
+	Defines a wrapper for family of random number generators
+	utilizing the GNU/Linux random number library for float
+	and integer data types.  The float type is used to
+	support generation of the exponential distribution
+	using a famous IBM approximation.
+
+	Function prototype definitions (function signatures) follow.
+*/
+
+#ifndef __RAND_API_H
+#define __RAND_API_H
+
+/* generate seed from clock */
+extern void seedRandGenerator(  );  
+
+/*  0.0 <= random float < 1.0  */
+extern float getRandFloat(  );    
+
+/*  0 thru (max - 1)  */
+extern int getRandInteger( int max );
+
+/*  exponential interarrival time, multiply by mean */
+extern float getRandExponential( );  
+
+#endif /* __RAND_API_H */
+
+
+
+
+
+
+
+
+
+[cjmartin@localhost Pipes]$ cat src/randapi.c
+
+/*
+ 
+
+	Random Functions API Wrapper in file randapi.c
+
+	extern float getRandFloat(  );   returns random floating point 0 <= rand < 1.0.
+	extern getRandInteger(  max );    returns random integer between 0 and (max - 1)
+	extern float getRandExponential(  ); returns random exponential
+	      inter-arrival time, multiply by the mean to obtain the actual interval.
+
+	Must seed first using extern void seedGenerator( void );
+	in file seedRandGererator.c.
+	Prototypes in randapi.h
+
+	All “C” compilers provide a random number generator providing random integers
+	In the range 0 =< rand( ) < RAND_MAX where RAND_MAX is compiler/hardware
+	 dependent.  The quality of the deviates is a topic of constant debate.  “rand( )”
+	is uniformly distributed.  This functionality is provided in stdlib.h.  srand(  ) may be
+	used to seed the generator.  If the seed is not changed/set, rand(  ) will always
+	produce the same series (sequence)of random numbers - a pseudo random
+	 number generator.
+*/
+
+/* generate random floating point */
+#include <stdlib.h>
+
+float getRandFloat( )    //  0 <= random deviate < 1
+{					// “RAND_MAX” is largest integer
+		float randDeviate;
+
+		randDeviate = ((float)rand( ) / (float)RAND_MAX);
+		return randDeviate;
+
+		//return ((float)rand( ) / (float)RAND_MAX);
+}
+
+/* generate random integer from 0 thru (max - 1).  */
+int getRandInteger( int max )
+{
+	int randDeviate;
+	randDeviate = (int)((float)max * rand( ) / (RAND_MAX+1.0));  //force float division
+	return randDeviate;
+}
+/* Assume max = 5, Rand_Max =100.  
+ * If Rn = 17 => 17*5/101 = 0.84 = 0; 
+ * if Rn = 25 => 25*5/101 = 1.237 = 1; 
+ * if Rn = 100 => 100*5/101 = 4.95 = 4 */
+/* getExponential( );  returns exponential interarrival time.  Multiply by mean. */
+
+float getRandExponential( )  //Interpolate between points on
+{						//graph: lower bound + slope
+    float x, deviate;	//of line * distance on x axis.
+    			//Note more approximation
+			
+    x = getRandFloat( );//points in exponential tail.
+
+    if (x == 0.0)     
+      deviate = 0.0;  
+    else if (x <= 0.1)  
+      		deviate = ((x - 0.0) * 1.04 + 0.0);
+    else if (x <= 0.2)
+      		deviate = ((x - 0.1) * 1.18 + 0.104);
+    else if (x <= 0.3)
+      		deviate = ((x - 0.2) * 1.33 + 0.222);
+    else if (x <= 0.4)
+      		deviate = ((x - 0.3) * 1.54 + 0.355);
+    else if (x <= 0.5)
+      		deviate = ((x - 0.4) * 1.81 + 0.509);
+    else if (x <= 0.6)
+      		deviate = ((x - 0.5) * 2.25 + 0.690);
+    else if (x <= 0.7)
+      		deviate = ((x - 0.6) * 2.85 + 0.915);
+    else if (x <= 0.75)
+      		deviate =  ((x - 0.70) * 3.60 + 1.2);
+    else if (x <= 0.8)
+      		deviate =  ((x - 0.75) * 4.40 + 1.38);
+    else if (x <= 0.84)
+      		deviate =  ((x - 0.8) * 5.75 + 1.60);
+    else if (x <= 0.88)
+      		deviate =  ((x - 0.84) * 7.25 + 1.83);
+    else if (x <= 0.9)
+      		deviate =  ((x - 0.88) * 9.00 + 2.12);
+    else if (x <= 0.92)
+      		deviate =  ((x - 0.90) * 11.0 + 2.30);
+    else if (x <= 0.94)
+      		deviate =  ((x - 0.92) * 14.5 + 2.52);
+    else if (x<= 0.95)
+      		deviate =  ((x - 0.94) * 18.0 + 2.81);
+    else if (x <= 0.96)
+      	    deviate =  ((x - 0.95) * 21.0 + 2.99);
+    else if (x <= 0.97)
+      		deviate =  ((x - 0.96) * 30.0 + 3.20);
+    else if (x <= 0.98)
+      		deviate =  ((x - 0.97) * 40.0 + 3.50);
+    else if (x <= 0.99)
+      		deviate =  ((x - 0.98) * 70.0 + 3.90);
+    else if (x <= 0.995)
+      		deviate =  ((x - 0.99) * 140.0 + 4.60);
+    else if (x <= 0.998)
+      		deviate =  ((x - 0.995) * 300.0 + 5.30);
+    else if (x <= 0.999)
+    	  	deviate =  ((x - 0.998) * 800.0 + 6.20);
+    else
+      		deviate =  ((x - 0.9997) * 1000.0 + 8.0);
+
+    return (float)deviate;
+}
+
+
+
+
+
+
+[cjmartin@localhost Pipes]$ cat src/seedRandGenerator.c 
+/*
+	Initialize Random API using system clock.
+	This is convenient but not cryptographically sound.
+*/
+
+#include <stdlib.h>
+#include <time.h>
+
+void seedRandGenerator( )
+{
+	time_t seed;  //The seed repeats every 60 seconds.
+
+	seed = time( NULL );    // srand( time( NULL ) );
+	srand( seed );
+	return;
+}
+
